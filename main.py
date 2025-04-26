@@ -1,4 +1,4 @@
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.responses import StreamingResponse, JSONResponse
 import cv2
 import numpy as np
@@ -11,15 +11,22 @@ from fastapi.middleware.cors import CORSMiddleware
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # for testing, use ["http://localhost:3000"] in production # or use specific frontend URL for production
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 # ----------------- Enhancement Functions -----------------
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 mp_face_mesh = mp.solutions.face_mesh
 mp_pose = mp.solutions.pose
+
+def decode_image(contents):
+    img = cv2.imdecode(np.frombuffer(contents, np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        raise HTTPException(status_code=400, detail="Invalid image file.")
+    return img
 
 def is_blurry(image, threshold=100.0):
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -33,8 +40,7 @@ def get_blur_score(image):
 def auto_enhance(image):
     yuv = cv2.cvtColor(image, cv2.COLOR_BGR2YUV)
     yuv[:, :, 0] = cv2.equalizeHist(yuv[:, :, 0])
-    output = cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR)
-    return output
+    return cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR)
 
 def white_balance(img):
     result = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
@@ -45,9 +51,7 @@ def white_balance(img):
     return cv2.cvtColor(result, cv2.COLOR_LAB2BGR)
 
 def sharpen_image(img):
-    kernel = np.array([[0, -1, 0],
-                       [-1, 5, -1],
-                       [0, -1, 0]])
+    kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]])
     return cv2.filter2D(img, -1, kernel)
 
 def auto_crop_face(img):
@@ -73,17 +77,14 @@ def straighten_image(img):
         angle /= len(lines)
     center = tuple(np.array(img.shape[1::-1]) / 2)
     rot_mat = cv2.getRotationMatrix2D(center, angle * 180/np.pi, 1.0)
-    result = cv2.warpAffine(img, rot_mat, img.shape[1::-1], flags=cv2.INTER_LINEAR)
-    return result
+    return cv2.warpAffine(img, rot_mat, img.shape[1::-1], flags=cv2.INTER_LINEAR)
 
 def cartoonify_image(img):
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     gray = cv2.medianBlur(gray, 5)
-    edges = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C,
-                                  cv2.THRESH_BINARY, 9, 9)
+    edges = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 9, 9)
     color = cv2.bilateralFilter(img, 9, 300, 300)
-    cartoon = cv2.bitwise_and(color, color, mask=edges)
-    return cartoon
+    return cv2.bitwise_and(color, color, mask=edges)
 
 def calculate_ear(landmarks, eye_indices):
     p1 = np.array([landmarks[eye_indices[1]].x, landmarks[eye_indices[1]].y])
@@ -96,9 +97,7 @@ def calculate_ear(landmarks, eye_indices):
     vertical1 = np.linalg.norm(p2 - p4)
     vertical2 = np.linalg.norm(p3 - p5)
     horizontal = np.linalg.norm(p1 - p6)
-
-    ear = (vertical1 + vertical2) / (2.0 * horizontal)
-    return ear
+    return (vertical1 + vertical2) / (2.0 * horizontal)
 
 def is_facing_camera(landmarks):
     left_shoulder = np.array([landmarks[11].x, landmarks[11].y])
@@ -114,16 +113,14 @@ def is_smiling(landmarks):
 
     horizontal = np.linalg.norm(mouth_left - mouth_right)
     vertical = np.linalg.norm(mouth_top - mouth_bottom)
-
-    ratio = vertical / horizontal
-    return ratio > 0.25
+    return (vertical / horizontal) > 0.25
 
 # ----------------- API Endpoints -----------------
 
 @app.post("/check_blur_and_enhance")
 async def check_blur_and_enhance(file: UploadFile = File(...)):
     contents = await file.read()
-    img = cv2.imdecode(np.frombuffer(contents, np.uint8), cv2.IMREAD_COLOR)
+    img = decode_image(contents)
 
     if is_blurry(img):
         return {"status": "rejected", "reason": "Image is too blurry."}
@@ -132,13 +129,12 @@ async def check_blur_and_enhance(file: UploadFile = File(...)):
     _, buffer = cv2.imencode('.jpg', enhanced)
     return StreamingResponse(BytesIO(buffer), media_type="image/jpeg")
 
-
 @app.post("/batch_enhance")
 async def batch_enhance(files: List[UploadFile] = File(...)):
     results = []
     for file in files:
         contents = await file.read()
-        img = cv2.imdecode(np.frombuffer(contents, np.uint8), cv2.IMREAD_COLOR)
+        img = decode_image(contents)
         score = get_blur_score(img)
 
         if score < 100:
@@ -152,7 +148,6 @@ async def batch_enhance(files: List[UploadFile] = File(...)):
             enhanced = auto_enhance(img)
             _, buffer = cv2.imencode('.jpg', enhanced)
             encoded = base64.b64encode(buffer).decode('utf-8')
-
             results.append({
                 "filename": file.filename,
                 "status": "enhanced",
@@ -161,161 +156,104 @@ async def batch_enhance(files: List[UploadFile] = File(...)):
             })
     return JSONResponse(content={"results": results})
 
-    
 @app.post("/white_balance_fix")
 async def white_balance_fix(file: UploadFile = File(...)):
-        contents = await file.read()
-        img = cv2.imdecode(np.frombuffer(contents, np.uint8), cv2.IMREAD_COLOR)
-
-        corrected = white_balance(img)
-        _, buffer = cv2.imencode('.jpg', corrected)
-        encoded = base64.b64encode(buffer).decode('utf-8')
-
-        return {"image_base64": encoded}
-
+    contents = await file.read()
+    img = decode_image(contents)
+    corrected = white_balance(img)
+    _, buffer = cv2.imencode('.jpg', corrected)
+    encoded = base64.b64encode(buffer).decode('utf-8')
+    return {"image_base64": encoded}
 
 @app.post("/sharpen_image")
 async def sharpen_image_endpoint(file: UploadFile = File(...)):
-        contents = await file.read()
-        img = cv2.imdecode(np.frombuffer(contents, np.uint8), cv2.IMREAD_COLOR)
-
-        sharpened = sharpen_image(img)
-        _, buffer = cv2.imencode('.jpg', sharpened)
-        encoded = base64.b64encode(buffer).decode('utf-8')
-
-        return {"image_base64": encoded}
-
+    contents = await file.read()
+    img = decode_image(contents)
+    sharpened = sharpen_image(img)
+    _, buffer = cv2.imencode('.jpg', sharpened)
+    encoded = base64.b64encode(buffer).decode('utf-8')
+    return {"image_base64": encoded}
 
 @app.post("/blur_score")
 async def blur_score(file: UploadFile = File(...)):
-         contents = await file.read()
-         img = cv2.imdecode(np.frombuffer(contents, np.uint8), cv2.IMREAD_COLOR)
-         score = get_blur_score(img)
-         return {"blur_score": score}
-
+    contents = await file.read()
+    img = decode_image(contents)
+    score = get_blur_score(img)
+    return {"blur_score": score}
 
 @app.post("/auto_crop_face")
 async def auto_crop_face_endpoint(file: UploadFile = File(...)):
-         contents = await file.read()
-         img = cv2.imdecode(np.frombuffer(contents, np.uint8), cv2.IMREAD_COLOR)
-         cropped = auto_crop_face(img)
-         if cropped is None:
-             return {"status": "no_face_detected"}
-         _, buffer = cv2.imencode('.jpg', cropped)
-         encoded = base64.b64encode(buffer).decode('utf-8')
-         return {"image_base64": encoded}
-
+    contents = await file.read()
+    img = decode_image(contents)
+    cropped = auto_crop_face(img)
+    if cropped is None:
+        return {"status": "no_face_detected"}
+    _, buffer = cv2.imencode('.jpg', cropped)
+    encoded = base64.b64encode(buffer).decode('utf-8')
+    return {"image_base64": encoded}
 
 @app.post("/denoise_image")
 async def denoise_image_endpoint(file: UploadFile = File(...)):
-         contents = await file.read()
-         img = cv2.imdecode(np.frombuffer(contents, np.uint8), cv2.IMREAD_COLOR)
-         denoised = denoise_image(img)
-         _, buffer = cv2.imencode('.jpg', denoised)
-         encoded = base64.b64encode(buffer).decode('utf-8')
-         return {"image_base64": encoded}
-
+    contents = await file.read()
+    img = decode_image(contents)
+    denoised = denoise_image(img)
+    _, buffer = cv2.imencode('.jpg', denoised)
+    encoded = base64.b64encode(buffer).decode('utf-8')
+    return {"image_base64": encoded}
 
 @app.post("/straighten_image")
 async def straighten_image_endpoint(file: UploadFile = File(...)):
-         contents = await file.read()
-         img = cv2.imdecode(np.frombuffer(contents, np.uint8), cv2.IMREAD_COLOR)
-         straightened = straighten_image(img)
-         _, buffer = cv2.imencode('.jpg', straightened)
-         encoded = base64.b64encode(buffer).decode('utf-8')
-         return {"image_base64": encoded}
-
+    contents = await file.read()
+    img = decode_image(contents)
+    straightened = straighten_image(img)
+    _, buffer = cv2.imencode('.jpg', straightened)
+    encoded = base64.b64encode(buffer).decode('utf-8')
+    return {"image_base64": encoded}
 
 @app.post("/cartoonify_image")
 async def cartoonify_image_endpoint(file: UploadFile = File(...)):
-         contents = await file.read()
-         img = cv2.imdecode(np.frombuffer(contents, np.uint8), cv2.IMREAD_COLOR)
-         cartoon = cartoonify_image(img)
-         _, buffer = cv2.imencode('.jpg', cartoon)
-         encoded = base64.b64encode(buffer).decode('utf-8')
-         return {"image_base64": encoded}
-
-
-@app.post("/smart_rank_photos")
-async def smart_rank_photos(files: List[UploadFile] = File(...)):
-         results = []
-         for file in files:
-             contents = await file.read()
-             img = cv2.imdecode(np.frombuffer(contents, np.uint8), cv2.IMREAD_COLOR)
-             blur = get_blur_score(img)
-             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-             brightness = np.mean(gray)
-             faces = face_cascade.detectMultiScale(gray, 1.3, 5)
-             has_face = len(faces) > 0
-
-             sharpness_weight = 0.6
-             brightness_weight = 0.3
-             face_bonus = 15 if has_face else 0
-
-             normalized_blur = min(blur / 1000, 1.0)
-             normalized_brightness = min(brightness / 255, 1.0)
-             score = (sharpness_weight * normalized_blur * 100) + (brightness_weight * normalized_brightness * 100) + face_bonus
-
-             results.append({
-                 "filename": file.filename,
-                 "blur_score": blur,
-                 "brightness_score": brightness,
-                 "has_face": has_face,
-                 "final_score": score
-             })
-
-         results = sorted(results, key=lambda x: x["final_score"], reverse=True)
-         return JSONResponse(content={"ranked_photos": results})
-
+    contents = await file.read()
+    img = decode_image(contents)
+    cartoon = cartoonify_image(img)
+    _, buffer = cv2.imencode('.jpg', cartoon)
+    encoded = base64.b64encode(buffer).decode('utf-8')
+    return {"image_base64": encoded}
 
 @app.post("/detect_closed_eyes")
 async def detect_closed_eyes(file: UploadFile = File(...)):
-         contents = await file.read()
-         image = cv2.imdecode(np.frombuffer(contents, np.uint8), cv2.IMREAD_COLOR)
-         rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-
-         with mp_face_mesh.FaceMesh(static_image_mode=True, refine_landmarks=True) as face_mesh:
-             result = face_mesh.process(rgb_image)
-             if not result.multi_face_landmarks:
-                 return {"status": "no_face_detected"}
-
-             face_landmarks = result.multi_face_landmarks[0].landmark
-
-             LEFT_EYE = [362, 385, 387, 263, 373, 380]
-             RIGHT_EYE = [33, 160, 158, 133, 153, 144]
-
-             left_ear = calculate_ear(face_landmarks, LEFT_EYE)
-             right_ear = calculate_ear(face_landmarks, RIGHT_EYE)
-
-             avg_ear = (left_ear + right_ear) / 2
-             eyes_closed = avg_ear < 0.21
-
-             return {"closed_eyes": eyes_closed, "average_ear": avg_ear}
-
+    contents = await file.read()
+    image = decode_image(contents)
+    rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    with mp_face_mesh.FaceMesh(static_image_mode=True, refine_landmarks=True) as face_mesh:
+        result = face_mesh.process(rgb_image)
+        if not result.multi_face_landmarks:
+            return {"status": "no_face_detected"}
+        face_landmarks = result.multi_face_landmarks[0].landmark
+        LEFT_EYE = [362, 385, 387, 263, 373, 380]
+        RIGHT_EYE = [33, 160, 158, 133, 153, 144]
+        left_ear = calculate_ear(face_landmarks, LEFT_EYE)
+        right_ear = calculate_ear(face_landmarks, RIGHT_EYE)
+        avg_ear = (left_ear + right_ear) / 2
+        eyes_closed = avg_ear < 0.21
+        return {"closed_eyes": eyes_closed, "average_ear": avg_ear}
 
 @app.post("/detect_pose_smile")
 async def detect_pose_smile(file: UploadFile = File(...)):
-         contents = await file.read()
-         image = cv2.imdecode(np.frombuffer(contents, np.uint8), cv2.IMREAD_COLOR)
-         rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    contents = await file.read()
+    image = decode_image(contents)
+    rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    pose = mp_pose.Pose(static_image_mode=True)
+    face_mesh = mp_face_mesh.FaceMesh(static_image_mode=True, refine_landmarks=True)
+    pose_result = pose.process(rgb_image)
+    face_result = face_mesh.process(rgb_image)
 
-         pose = mp_pose.Pose(static_image_mode=True)
-         face_mesh = mp_face_mesh.FaceMesh(static_image_mode=True, refine_landmarks=True)
+    if not pose_result.pose_landmarks or not face_result.multi_face_landmarks:
+        return {"status": "no_person_detected"}
 
-         pose_result = pose.process(rgb_image)
-         face_result = face_mesh.process(rgb_image)
+    pose_landmarks = pose_result.pose_landmarks.landmark
+    face_landmarks = face_result.multi_face_landmarks[0].landmark
+    facing = is_facing_camera(pose_landmarks)
+    smiling = is_smiling(face_landmarks)
+    return {"facing_camera": facing, "smiling": smiling}
 
-         if not pose_result.pose_landmarks or not face_result.multi_face_landmarks:
-             return {"status": "no_person_detected"}
-
-         pose_landmarks = pose_result.pose_landmarks.landmark
-         face_landmarks = face_result.multi_face_landmarks[0].landmark
-
-         facing = is_facing_camera(pose_landmarks)
-         smiling = is_smiling(face_landmarks)
-
-         return {
-             "facing_camera": facing,
-             "smiling": smiling
-         }
         
