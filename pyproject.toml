@@ -1,7 +1,14 @@
 [project]
-name = "python-template"
+name = "photo-enhance-api"
 version = "0.1.0"
-description = ""
-authors = ["Your Name <you@example.com>"]
+description = "FastAPI + OpenCV + Pillow image enhancer"
+authors = ["info5806"]
 requires-python = ">=3.11"
-dependencies = []
+
+dependencies = [
+  "fastapi",
+  "uvicorn",
+  "opencv-python",
+  "pillow",
+  "python-multipart"
+]
