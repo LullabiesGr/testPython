@@ -7,6 +7,8 @@ from typing import List
 import base64
 import mediapipe as mp
 from fastapi.middleware.cors import CORSMiddleware
+# Import Pillow
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
 app = FastAPI()
 app.add_middleware(
@@ -115,7 +117,89 @@ def is_smiling(landmarks):
     vertical = np.linalg.norm(mouth_top - mouth_bottom)
     return (vertical / horizontal) > 0.25
 
-# ----------------- API Endpoints -----------------
+# ----------------- Pillow Enhancement Functions -----------------
+
+def cv2_to_pil(cv2_img):
+    # Convert from BGR to RGB
+    rgb_img = cv2.cvtColor(cv2_img, cv2.COLOR_BGR2RGB)
+    # Convert to PIL Image
+    return Image.fromarray(rgb_img)
+
+def pil_to_cv2(pil_img):
+    # Convert to numpy array
+    np_img = np.array(pil_img)
+    # Convert from RGB to BGR
+    return cv2.cvtColor(np_img, cv2.COLOR_RGB2BGR)
+
+def enhance_brightness(img, factor=1.5):
+    pil_img = cv2_to_pil(img)
+    enhancer = ImageEnhance.Brightness(pil_img)
+    enhanced_img = enhancer.enhance(factor)
+    return pil_to_cv2(enhanced_img)
+
+def enhance_contrast(img, factor=1.5):
+    pil_img = cv2_to_pil(img)
+    enhancer = ImageEnhance.Contrast(pil_img)
+    enhanced_img = enhancer.enhance(factor)
+    return pil_to_cv2(enhanced_img)
+
+def enhance_color(img, factor=1.5):
+    pil_img = cv2_to_pil(img)
+    enhancer = ImageEnhance.Color(pil_img)
+    enhanced_img = enhancer.enhance(factor)
+    return pil_to_cv2(enhanced_img)
+
+def enhance_sharpness(img, factor=1.5):
+    pil_img = cv2_to_pil(img)
+    enhancer = ImageEnhance.Sharpness(pil_img)
+    enhanced_img = enhancer.enhance(factor)
+    return pil_to_cv2(enhanced_img)
+
+def apply_blur(img, radius=2):
+    pil_img = cv2_to_pil(img)
+    blurred_img = pil_img.filter(ImageFilter.GaussianBlur(radius=radius))
+    return pil_to_cv2(blurred_img)
+
+def apply_emboss(img):
+    pil_img = cv2_to_pil(img)
+    embossed_img = pil_img.filter(ImageFilter.EMBOSS)
+    return pil_to_cv2(embossed_img)
+
+def apply_edge_enhance(img):
+    pil_img = cv2_to_pil(img)
+    edge_enhanced_img = pil_img.filter(ImageFilter.EDGE_ENHANCE_MORE)
+    return pil_to_cv2(edge_enhanced_img)
+
+def auto_equalize(img):
+    pil_img = cv2_to_pil(img)
+    equalized_img = ImageOps.equalize(pil_img)
+    return pil_to_cv2(equalized_img)
+
+def convert_to_grayscale(img):
+    pil_img = cv2_to_pil(img)
+    grayscale_img = ImageOps.grayscale(pil_img)
+    # Convert back to 3-channel grayscale
+    return cv2.cvtColor(np.array(grayscale_img), cv2.COLOR_GRAY2BGR)
+
+def apply_sepia(img):
+    pil_img = cv2_to_pil(img)
+    # Convert to grayscale
+    gray_img = ImageOps.grayscale(pil_img)
+    # Apply sepia tone
+    sepia_img = ImageOps.colorize(gray_img, "#704214", "#C0A080")
+    return pil_to_cv2(sepia_img)
+
+def apply_posterize(img, bits=2):
+    pil_img = cv2_to_pil(img)
+    posterized_img = ImageOps.posterize(pil_img, bits)
+    return pil_to_cv2(posterized_img)
+
+def apply_solarize(img, threshold=128):
+    pil_img = cv2_to_pil(img)
+    solarized_img = ImageOps.solarize(pil_img, threshold)
+    return pil_to_cv2(solarized_img)
+
+# ----------------- Original API Endpoints -----------------
 
 @app.post("/check_blur_and_enhance")
 async def check_blur_and_enhance(file: UploadFile = File(...)):
@@ -256,4 +340,145 @@ async def detect_pose_smile(file: UploadFile = File(...)):
     smiling = is_smiling(face_landmarks)
     return {"facing_camera": facing, "smiling": smiling}
 
+# ----------------- Pillow API Endpoints -----------------
+
+@app.post("/enhance_brightness")
+async def enhance_brightness_endpoint(file: UploadFile = File(...), factor: float = 1.5):
+    contents = await file.read()
+    img = decode_image(contents)
+    brightened = enhance_brightness(img, factor)
+    _, buffer = cv2.imencode('.jpg', brightened)
+    encoded = base64.b64encode(buffer).decode('utf-8')
+    return {"image_base64": encoded}
+
+@app.post("/enhance_contrast")
+async def enhance_contrast_endpoint(file: UploadFile = File(...), factor: float = 1.5):
+    contents = await file.read()
+    img = decode_image(contents)
+    contrasted = enhance_contrast(img, factor)
+    _, buffer = cv2.imencode('.jpg', contrasted)
+    encoded = base64.b64encode(buffer).decode('utf-8')
+    return {"image_base64": encoded}
+
+@app.post("/enhance_color")
+async def enhance_color_endpoint(file: UploadFile = File(...), factor: float = 1.5):
+    contents = await file.read()
+    img = decode_image(contents)
+    color_enhanced = enhance_color(img, factor)
+    _, buffer = cv2.imencode('.jpg', color_enhanced)
+    encoded = base64.b64encode(buffer).decode('utf-8')
+    return {"image_base64": encoded}
+
+@app.post("/enhance_sharpness")
+async def enhance_sharpness_endpoint(file: UploadFile = File(...), factor: float = 1.5):
+    contents = await file.read()
+    img = decode_image(contents)
+    sharpened = enhance_sharpness(img, factor)
+    _, buffer = cv2.imencode('.jpg', sharpened)
+    encoded = base64.b64encode(buffer).decode('utf-8')
+    return {"image_base64": encoded}
+
+@app.post("/apply_blur")
+async def apply_blur_endpoint(file: UploadFile = File(...), radius: float = 2.0):
+    contents = await file.read()
+    img = decode_image(contents)
+    blurred = apply_blur(img, radius)
+    _, buffer = cv2.imencode('.jpg', blurred)
+    encoded = base64.b64encode(buffer).decode('utf-8')
+    return {"image_base64": encoded}
+
+@app.post("/apply_emboss")
+async def apply_emboss_endpoint(file: UploadFile = File(...)):
+    contents = await file.read()
+    img = decode_image(contents)
+    embossed = apply_emboss(img)
+    _, buffer = cv2.imencode('.jpg', embossed)
+    encoded = base64.b64encode(buffer).decode('utf-8')
+    return {"image_base64": encoded}
+
+@app.post("/apply_edge_enhance")
+async def apply_edge_enhance_endpoint(file: UploadFile = File(...)):
+    contents = await file.read()
+    img = decode_image(contents)
+    edge_enhanced = apply_edge_enhance(img)
+    _, buffer = cv2.imencode('.jpg', edge_enhanced)
+    encoded = base64.b64encode(buffer).decode('utf-8')
+    return {"image_base64": encoded}
+
+@app.post("/auto_equalize")
+async def auto_equalize_endpoint(file: UploadFile = File(...)):
+    contents = await file.read()
+    img = decode_image(contents)
+    equalized = auto_equalize(img)
+    _, buffer = cv2.imencode('.jpg', equalized)
+    encoded = base64.b64encode(buffer).decode('utf-8')
+    return {"image_base64": encoded}
+
+@app.post("/convert_to_grayscale")
+async def convert_to_grayscale_endpoint(file: UploadFile = File(...)):
+    contents = await file.read()
+    img = decode_image(contents)
+    grayscale = convert_to_grayscale(img)
+    _, buffer = cv2.imencode('.jpg', grayscale)
+    encoded = base64.b64encode(buffer).decode('utf-8')
+    return {"image_base64": encoded}
+
+@app.post("/apply_sepia")
+async def apply_sepia_endpoint(file: UploadFile = File(...)):
+    contents = await file.read()
+    img = decode_image(contents)
+    sepia = apply_sepia(img)
+    _, buffer = cv2.imencode('.jpg', sepia)
+    encoded = base64.b64encode(buffer).decode('utf-8')
+    return {"image_base64": encoded}
+
+@app.post("/apply_posterize")
+async def apply_posterize_endpoint(file: UploadFile = File(...), bits: int = 2):
+    contents = await file.read()
+    img = decode_image(contents)
+    posterized = apply_posterize(img, bits)
+    _, buffer = cv2.imencode('.jpg', posterized)
+    encoded = base64.b64encode(buffer).decode('utf-8')
+    return {"image_base64": encoded}
+
+@app.post("/apply_solarize")
+async def apply_solarize_endpoint(file: UploadFile = File(...), threshold: int = 128):
+    contents = await file.read()
+    img = decode_image(contents)
+    solarized = apply_solarize(img, threshold)
+    _, buffer = cv2.imencode('.jpg', solarized)
+    encoded = base64.b64encode(buffer).decode('utf-8')
+    return {"image_base64": encoded}
+
+@app.post("/batch_pillow_enhance")
+async def batch_pillow_enhance(
+    files: List[UploadFile] = File(...), 
+    brightness: float = 1.0,
+    contrast: float = 1.0,
+    color: float = 1.0,
+    sharpness: float = 1.0
+):
+    results = []
+    for file in files:
+        contents = await file.read()
+        img = decode_image(contents)
+        
+        # Apply enhancements only if factor is different from default
+        if brightness != 1.0:
+            img = enhance_brightness(img, brightness)
+        if contrast != 1.0:
+            img = enhance_contrast(img, contrast)
+        if color != 1.0:
+            img = enhance_color(img, color)
+        if sharpness != 1.0:
+            img = enhance_sharpness(img, sharpness)
+            
+        _, buffer = cv2.imencode('.jpg', img)
+        encoded = base64.b64encode(buffer).decode('utf-8')
+        results.append({
+            "filename": file.filename,
+            "status": "enhanced",
+            "image_base64": encoded
+        })
+    return JSONResponse(content={"results": results})
         
