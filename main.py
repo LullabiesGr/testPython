@@ -450,6 +450,60 @@ async def apply_solarize_endpoint(file: UploadFile = File(...), threshold: int =
     encoded = base64.b64encode(buffer).decode('utf-8')
     return {"image_base64": encoded}
 
+@app.post("/auto_cull")
+async def auto_cull(
+    files: List[UploadFile] = File(...),
+    event_type: str = "wedding"
+):
+    results = []
+    for file in files:
+        contents = await file.read()
+        img = decode_image(contents)
+
+        blur_score = get_blur_score(img)
+        blurry = is_blurry(img)
+
+        rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        face_result = mp_face_mesh.FaceMesh(static_image_mode=True).process(rgb)
+        pose_result = mp_pose.Pose(static_image_mode=True).process(rgb)
+
+        face_ok = face_result.multi_face_landmarks is not None
+        pose_ok = pose_result.pose_landmarks is not None
+        smile_ok = False
+        eyes_open = True
+
+        if face_ok:
+            face_landmarks = face_result.multi_face_landmarks[0].landmark
+            smile_ok = is_smiling(face_landmarks)
+
+            LEFT_EYE = [362, 385, 387, 263, 373, 380]
+            RIGHT_EYE = [33, 160, 158, 133, 153, 144]
+            left_ear = calculate_ear(face_landmarks, LEFT_EYE)
+            right_ear = calculate_ear(face_landmarks, RIGHT_EYE)
+            eyes_open = (left_ear + right_ear) / 2 > 0.21
+
+        approved = True
+        if blurry or not face_ok or not pose_ok or not eyes_open:
+            approved = False
+
+        if event_type == "wedding":
+            if not smile_ok:
+                approved = False
+        elif event_type == "baptism":
+            approved = approved and face_ok
+
+        results.append({
+            "filename": file.filename,
+            "approved": approved,
+            "blur_score": blur_score,
+            "has_face": face_ok,
+            "has_pose": pose_ok,
+            "eyes_open": eyes_open,
+            "smiling": smile_ok
+        })
+
+    return JSONResponse(content={"results": results})
+
 @app.post("/batch_pillow_enhance")
 async def batch_pillow_enhance(
     files: List[UploadFile] = File(...), 
